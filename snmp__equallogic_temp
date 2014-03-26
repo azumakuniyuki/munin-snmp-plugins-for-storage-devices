@@ -4,13 +4,22 @@
 use strict;
 use warnings;
 use Munin::Plugin::SNMP;
+use Net::SNMP 'oid_lex_sort';
 
 my( $PluginSess, $E ) = Munin::Plugin::SNMP->session();
 die sprintf( "# Error: %s\n", $E ) if $E;
 
 # http://cric.grenoble.cnrs.fr/Administrateurs/Outils/MIBS/?oid=1.3.6.1.4.1.12740.2.1.6.1
-my $PluginVers = '0.0.3';
-my $ParentOIDv = '1.3.6.1.4.1.12740.2.1.6.1';
+my $PluginVers = '0.0.6';
+my $GraphValue = {
+    'title'     => 'Temperatures',
+    'device'    => 'EqualLogic',
+    'vlabel'    => 'degree Celsius',
+    'base'      => undef,
+    'lower'     => 0,
+    'upper'     => 120,
+};
+my $ParentOIDv = '.1.3.6.1.4.1.12740.2.1.6.1';
 my $OIDEnfants = {
     'label' => 2,   # eqlMemberHealthDetailsTemperatureName
     'value' => 3,   # eqlMemberHealthDetailsTemperatureValue
@@ -45,17 +54,30 @@ my $SNMPConfig = {
     'port'      => $ENV{'port'} || 161,
     'community' => $ENV{'community'} || 'dellpublic',
     'version'   => $ENV{'version'} || '2c',
-    'device'    => 'EqualLogic',
 };
 
+my $MemberOIDv = '.1.3.6.1.4.1.12740.2.1.1.1.9.1';
+my $MemberList = $PluginSess->get_by_regex( $MemberOIDv, '\d+' ) || {};
+my $MemberName = undef; # My member name, id
+
+if( scalar keys %$MemberList ) {
+    # Get my member id string
+    for my $e ( keys %$MemberList ) {
+        next unless uc $SNMPConfig->{'host'} eq $MemberList->{ $e };
+        $MemberName = $e;
+        last;
+    }
+}
+
+my $v = '.1.'.$MemberName;
 my $LabelIndex = $PluginSess->get_hash(
                     '-baseoid'  => $ParentOIDv,
                     '-cols'     => {
-                        $OIDEnfants->{'label'} => 'label',
-                        $OIDEnfants->{'value'} => 'value',
-                        $OIDEnfants->{'state'} => 'state',
-                        $OIDEnfants->{'crit1'} => 'critical',
-                        $OIDEnfants->{'warn1'} => 'warning',
+                        $OIDEnfants->{'label'}.$v => 'label',
+                        $OIDEnfants->{'value'}.$v => 'value',
+                        $OIDEnfants->{'state'}.$v => 'state',
+                        $OIDEnfants->{'crit1'}.$v => 'critical',
+                        $OIDEnfants->{'warn1'}.$v => 'warning',
                     }
                  ) or die( '# Error: '.$PluginSess->error );
 
@@ -70,10 +92,13 @@ if( defined $ARGV[0] ) {
         if( $SNMPConfig->{'host'} && $SNMPConfig->{'host'} ne 'localhost' ) {
             printf( "host_name %s\n", $SNMPConfig->{'host'} );
         }
-        printf( "graph_title %s Temperatures\n", $SNMPConfig->{'device'} );
-        printf( "graph_args --lower-limit 0 --upper-limit 150\n" );
-        printf( "graph_vlabel degree Celsius\n" );
+        printf( "graph_title %s %s\n", $GraphValue->{'device'}, $GraphValue->{'title'} );
+        printf( "graph_args --lower-limit %d --upper-limit %d\n", $GraphValue->{'lower'}, $GraphValue->{'upper'} );
+        printf( "graph_vlabel %s\n", $GraphValue->{'vlabel'} );
         printf( "graph_category sensors\n" );
+
+        my $o = [ map { get_id( $_ ) } oid_lex_sort( keys %$LabelIndex ) ];
+        printf( "graph_order %s\n", join( ' ', @$o ) );
 
         for my $e ( keys %$LabelIndex ) {
             my $i = get_id( $e );
@@ -82,7 +107,7 @@ if( defined $ARGV[0] ) {
             for my $f ( qw|label warning critical| ) {
                 printf( "%s.%s %s\n", $i, $f, $LabelIndex->{ $e }->{ $f } );
             }
-            printf ( "%s.type GAUGE\n", $i );
+            printf( "%s.type GAUGE\n", $i );
         }
     }
     exit 0;
@@ -98,15 +123,7 @@ if( defined $ARGV[0] ) {
 
 sub get_id {
     my $argv = shift;
-
-    if( $argv =~ m/\A\d+[.]\d+[.](\d+)\z/ ) {
-        $argv = $DeviceMaps->{ $1 };
-    }
-
-    # SNMPv2-SMI::enterprises.12740.2.1.6.1.2.1.*.1 = STRING: "System"
-    # SNMPv2-SMI::enterprises.12740.2.1.6.1.3.1.*.1 = Gauge32: 0
-    return $argv unless $argv eq 'System';
-    return '';
+    return $DeviceMaps->{ $argv } || '';
 }
 
 =head1 NAME
