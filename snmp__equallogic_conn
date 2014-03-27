@@ -1,0 +1,169 @@
+#!/usr/bin/perl -w
+#%# family=snmpauto
+#%# capabilities=snmpconf
+use strict;
+use warnings;
+use Munin::Plugin::SNMP;
+use Net::SNMP 'oid_lex_sort';
+
+my( $PluginSess, $E ) = Munin::Plugin::SNMP->session();
+die sprintf( "# Error: %s\n", $E ) if $E;
+
+# http://cric.grenoble.cnrs.fr/Administrateurs/Outils/MIBS/?oid=1.3.6.1.4.1.12740.2.1.7.1
+my $PluginVers = '0.0.1';
+my $GraphValue = {
+    'title'     => 'Connections',
+    'device'    => 'EqualLogic',
+    'vlabel'    => 'conn',
+    'base'      => 1000,
+    'lower'     => 0,
+    'upper'     => 0,
+};
+my $StateIndex = {
+    '0' => 'unknown',
+    '1' => 'normal',
+    '2' => 'warning',
+    '3' => 'critical',
+};
+my $ParentOIDv = '1.3.6.1.4.1.12740.2.1.12.1';
+my $OIDEnfants = {
+    'total-conns'   => 1,   # eqlMemberNumberOfConnections
+    'r-lantency'    => 2,   # eqlMemberReadLatency
+    'w-lantency'    => 3,   # eqlMemberWriteLatency
+    'r-avg-latency' => 4,   # eqlMemberReadAvgLatency
+    'w-avg-latency' => 5,   # eqlMemberReadAvgLatency
+    'r-op-count'    => 6,   # eqlMemberReadOpCount
+    'w-op-count'    => 7,   # eqlMemberWriteOpCount
+    'txdata'        => 8,   # eqlMemberTxData
+    'rxdata'        => 9,   # eqlMemberRxData
+};
+my $LabelIndex = {
+    '1' => 'Total-Connections',
+    '2' => 'Read-Latency',
+    '3' => 'Write-Lantency',
+    '4' => 'Read-Latency(Avg.)',
+    '5' => 'Write-Latency(Avg.)',
+    '6' => 'OP-Count(Read)',
+    '7' => 'OP-Count(Write)',
+    '8' => 'TxData',
+    '9' => 'RxData',
+};
+my $SNMPConfig = {
+    'host'      => $ENV{'host'} || $PluginSess->hostname || '',
+    'port'      => $ENV{'port'} || 161,
+    'community' => $ENV{'community'} || 'dellpublic',
+    'version'   => $ENV{'version'} || '2c',
+};
+
+my $MemberOIDv = '.1.3.6.1.4.1.12740.2.1.1.1.9.1';
+my $MemberList = $PluginSess->get_by_regex( $MemberOIDv, '\d+' ) || {};
+my $MemberName = undef; # My member name, id
+
+if( scalar keys %$MemberList ) {
+    # Get my member id string
+    for my $e ( keys %$MemberList ) {
+        next unless uc $SNMPConfig->{'host'} eq $MemberList->{ $e };
+        $MemberName = $e;
+        last;
+    }
+}
+
+my $MetricsSet = $PluginSess->get_by_regex( $ParentOIDv, '\d+' ) || {};
+for my $e ( keys %$MetricsSet ) {
+    delete $MetricsSet->{ $e } unless $e =~ /$MemberName/;
+}
+die( '# Error: '.$PluginSess->error ) unless keys %$MetricsSet;
+
+if( defined $ARGV[0] ) {
+    # munin-run snmp_equallogic <some argument>
+    if( $ARGV[0] eq 'snmpconf' ) {
+        # munin-run snmp__equallogic snmpconf
+        printf( "require %s. [1-4]\n", $ParentOIDv );
+
+    } elsif( $ARGV[0] eq 'config' ) {
+        # munin-run snmp__equallogic config
+        if( $SNMPConfig->{'host'} && $SNMPConfig->{'host'} ne 'localhost' ) {
+            printf( "host_name %s\n", $SNMPConfig->{'host'} );
+        }
+        printf( "graph_title %s %s\n", $GraphValue->{'device'}, $GraphValue->{'title'} );
+        printf( "graph_args --base %d\n", $GraphValue->{'base'} );
+        printf( "graph_vlabel %s\n", $GraphValue->{'vlabel'} );
+        printf( "graph_category disk\n" );
+
+        my $o = [ map { oid2text( $_ ) } oid_lex_sort( keys %$MetricsSet ) ];
+        printf( "graph_order %s\n", join( ' ', @$o ) );
+
+        for my $e ( keys %$MetricsSet ) {
+            my $i = oid2text( $e );
+            my $f = oid2label( $e );
+            next unless $i;
+
+            printf( "%s.label %s\n", $i, $f );
+            printf( "%s.type GAUGE\n", $i );
+        }
+    }
+    exit 0;
+
+} else {
+    # munin-run snmp__equallogic_storage
+    for my $e ( keys %$MetricsSet ) {
+        my $i = oid2text( $e );
+        next unless $i;
+        printf( "%s.value %d\n", $i, $MetricsSet->{ $e } );
+    }
+}
+
+sub oid2text  {
+    my $argv = shift;
+    my $head = [ split '\.', $argv ]->[0];
+    my $text = '';
+
+    for my $e ( keys %$OIDEnfants ) {
+        next unless $head eq $OIDEnfants->{ $e };
+        $text = $e;
+        last;
+    }
+    return $text;
+}
+
+sub oid2label {
+    my $argv = shift;
+    my $head = [ split '\.', $argv ]->[0];
+    return $LabelIndex->{ $head } || '';
+}
+
+=head1 NAME
+
+snmp__equallogic_conn - Munin plugin for getting information about connections
+in EqualLogic storage via SNMP.
+
+=head1 SETUP
+
+    # cat /etc/hosts
+    192.168.0.101 eq01
+    192.168.0.102 eq02
+
+    # cd /etc/munin/plugins
+    # for E in eq01 eq02; do
+    > ln -s /usr/share/munin/plugins/snmp__equallogic_conn ./snmp_${E}_equallogic_conn
+    > done
+
+    # /etc/rc.d/init.d/munin-node restart
+
+=head1 SEE ALSO
+
+SNMP OIDs for EqualLogic
+L<http://cric.grenoble.cnrs.fr/Administrateurs/Outils/MIBS/?oid=1.3.6.1.4.1.12740>
+
+=head1 AUTHOR
+
+Copyright (C) 2014 azumakuniyuki
+
+=head1 LICENSE
+
+This library is free software; you can redistribute it and/or modify it under 
+the same terms as Perl itself.
+
+=cut
+
+
