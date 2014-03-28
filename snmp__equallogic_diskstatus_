@@ -1,0 +1,166 @@
+#!/usr/bin/perl -w
+#%# family=snmpauto
+#%# capabilities=snmpconf
+use strict;
+use warnings;
+use Munin::Plugin::SNMP;
+use Net::SNMP 'oid_lex_sort';
+use File::Basename 'basename';
+
+my( $PluginSess, $E ) = Munin::Plugin::SNMP->session();
+die sprintf( "# Error: %s\n", $E ) if $E;
+
+# http://cric.grenoble.cnrs.fr/Administrateurs/Outils/MIBS/?oid=1.3.6.1.4.1.12740.3.1.2.1
+my $PluginVers = '0.0.2';
+my $GraphValue = {
+    'title'     => 'Disk Status',
+    'device'    => 'EqualLogic',
+    'vlabel'    => 'n',
+    'base'      => 1024,
+    'lower'     => 0,
+    'upper'     => 0,
+};
+my $StateIndex = {
+    '0' => 'unknown',
+    '1' => 'normal',
+    '2' => 'warning',
+    '3' => 'critical',
+};
+my $ParentOIDv = '1.3.6.1.4.1.12740.3.1.2.1';
+my $OIDEnfants = {
+    'xfer'  => 1, # eqlDiskStatusXfers
+    'read'  => 2, # eqlDiskStatusBytesRead
+    'write' => 3, # eqlDiskStatusBytesWritten
+    'busy'  => 4, # eqlDiskStatusBusyTime
+    'io'    => 5, # eqlDiskStatusNumIOs
+    'fail'  => 6, # eqlDiskStatusFailXfers
+    'reset' => 7, # eqlDiskStatusNumResets
+    'qd'    => 8, # eqlDiskStatusTotalQD
+};
+my $LabelIndex = {
+    '1' => 'Transfers',
+    '2' => 'Bytes(Read)',
+    '3' => 'Bytes(Write)',
+    '4' => 'Busy Time(second)',
+    '5' => 'Num of IOs',
+    '6' => 'Failed Transfers',
+    '7' => 'Num of Resets',
+    '8' => 'Total Queue Depth',
+};
+my $SNMPConfig = {
+    'host'      => $ENV{'host'} || $PluginSess->hostname || '',
+    'port'      => $ENV{'port'} || 161,
+    'community' => $ENV{'community'} || 'dellpublic',
+    'version'   => $ENV{'version'} || '2c',
+};
+
+my $StatusName = [ split( '_',File::Basename::basename $0 ) ]->[-1] || 'xfer'; 
+my $MemberOIDv = '.1.3.6.1.4.1.12740.2.1.1.1.9.1';
+my $MemberList = $PluginSess->get_by_regex( $MemberOIDv, '\d+' ) || {};
+my $MemberName = undef; # My member name, id
+
+if( scalar keys %$MemberList ) {
+    # Get my member id string
+    for my $e ( keys %$MemberList ) {
+        next unless uc $SNMPConfig->{'host'} eq $MemberList->{ $e };
+        $MemberName = $e;
+        last;
+    }
+}
+
+my $v = sprintf( "%s.%d.1", $ParentOIDv, $OIDEnfants->{ $StatusName } );
+my $MetricsSet = $PluginSess->get_by_regex( $v, '\d+' ) || {};
+for my $e ( keys %$MetricsSet ) {
+    delete $MetricsSet->{ $e } unless $e =~ /$MemberName/;
+}
+die( '# Error: '.$PluginSess->error ) unless keys %$MetricsSet;
+
+if( defined $ARGV[0] ) {
+    # munin-run snmp_equallogic <some argument>
+    if( $ARGV[0] eq 'snmpconf' ) {
+        # munin-run snmp__equallogic snmpconf
+        printf( "require %s. [1-4]\n", $ParentOIDv );
+
+    } elsif( $ARGV[0] eq 'config' ) {
+        # munin-run snmp__equallogic config
+        if( $SNMPConfig->{'host'} && $SNMPConfig->{'host'} ne 'localhost' ) {
+            printf( "host_name %s\n", $SNMPConfig->{'host'} );
+        }
+        printf( "graph_title %s %s / %s\n", $GraphValue->{'device'}, $GraphValue->{'title'},
+                $LabelIndex->{ $OIDEnfants->{ $StatusName } } );
+        printf( "graph_args --base %d\n", $GraphValue->{'base'} ) if $GraphValue->{'base'};
+        printf( "graph_vlabel %s\n", $GraphValue->{'vlabel'} );
+        printf( "graph_scale yes\n" );
+        printf( "graph_category disk-status\n" );
+
+        my $n = scalar( keys %$MetricsSet );
+        my $o = [ map { sprintf( "%02d", $_ - 1 ) } ( 1 .. $n ) ];
+        printf( "graph_order %s\n", join( ' ', @$o ) );
+
+        for my $e ( 1 .. $n ) {
+            printf( "disk-%d.label Disk-%02d\n", $e - 1, $e - 1 );
+            printf( "disk-%d.type COUNTER\n", $e - 1 );
+        }
+    }
+    exit 0;
+
+} else {
+    # munin-run snmp__equallogic_storage
+    my $n = scalar( keys %$MetricsSet );
+    for my $e ( 1 .. $n ) {
+        my $k = sprintf( "%d.%d", $MemberName, $e );
+        printf( "disk-%d.value %d\n", $e - 1, $MetricsSet->{ $k } );
+    }
+}
+
+=head1 NAME
+
+snmp__equallogic_diskstatus_ - Munin plugin for getting status of each disk in
+EqualLogic storage via SNMP.
+
+=head1 SETUP
+
+    # cat /etc/hosts
+    192.168.0.101 eq01
+    192.168.0.102 eq02
+
+    # cd /etc/munin/plugins
+
+    # echo 'Substitute the STATUS NAME for variable "X"'
+    # X=xfer
+    # for E in eq01 eq02; do
+    > ln -s /usr/share/munin/plugins/snmp__equallogic_diskstatus_ ./snmp_${E}_equallogic_diskstatus_$X
+    > done
+
+    # /etc/rc.d/init.d/munin-node restart
+
+=head1 STATUS NAMES
+
+Available values are the followings:
+
+    xfer    # eqlDiskStatusXfers
+    read    # eqlDiskStatusBytesRead
+    write   # eqlDiskStatusBytesWritten
+    busy    # eqlDiskStatusBusyTime
+    io      # eqlDiskStatusNumIOs
+    fail    # eqlDiskStatusFailXfers
+    reset   # eqlDiskStatusNumResets
+    qd      # eqlDiskStatusTotalQD
+
+=head1 SEE ALSO
+
+SNMP OIDs for EqualLogic
+L<http://cric.grenoble.cnrs.fr/Administrateurs/Outils/MIBS/?oid=1.3.6.1.4.1.12740>
+
+=head1 AUTHOR
+
+Copyright (C) 2014 azumakuniyuki
+
+=head1 LICENSE
+
+This library is free software; you can redistribute it and/or modify it under 
+the same terms as Perl itself.
+
+=cut
+
+
