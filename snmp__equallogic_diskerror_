@@ -1,0 +1,174 @@
+#!/usr/bin/perl -w
+#%# family=snmpauto
+#%# capabilities=snmpconf
+use strict;
+use warnings;
+use Munin::Plugin::SNMP;
+use Net::SNMP 'oid_lex_sort';
+use File::Basename 'basename';
+
+my( $PluginSess, $E ) = Munin::Plugin::SNMP->session();
+die sprintf( "# Error: %s\n", $E ) if $E;
+
+# http://cric.grenoble.cnrs.fr/Administrateurs/Outils/MIBS/?oid=1.3.6.1.4.1.12740.3.1.3.1
+my $PluginVers = '0.0.2';
+my $GraphValue = {
+    'title'     => 'Disk Error',
+    'device'    => 'EqualLogic',
+    'vlabel'    => 'n',
+    'base'      => 1024,
+    'lower'     => 0,
+    'upper'     => 0,
+};
+my $StateIndex = {
+    '0' => 'unknown',
+    '1' => 'normal',
+    '2' => 'warning',
+    '3' => 'critical',
+};
+my $ParentOIDv = '1.3.6.1.4.1.12740.3.1.3.1';
+my $OIDEnfants = {
+    'ready'     => 1,   # eqlDiskErrorPhyReady
+    'internal'  => 2,   # eqlDiskErrorPhyInternal
+    'commwake'  => 3,   # eqlDiskErrorCommWake
+    'decode'    => 4,   # eqlDiskErrorDecode10b8b
+    'disparity' => 5,   # eqlDiskErrorDisparity
+    'crc'       => 6,   # eqlDiskErrorCRC
+    'handshake' => 7,   # eqlDiskErrorHandShake
+    'linkseq'   => 8,   # eqlDiskErrorLinkSeq
+    'transport' => 9,   # eqlDiskErrorTransportState
+    'fistype'   => 10,  # eqlDiskErrorUnrecFIS
+};
+my $LabelIndex = {
+    '1' => 'Phy Ready changed count',
+    '2' => 'Phy Internal errors',
+    '3' => 'Comm wake count',
+    '4' => '10b to 8b decode error',
+    '5' => 'disparity error',
+    '6' => 'CRC error',
+    '7' => 'Handshake error',
+    '8' => 'Link sequence error',
+    '9' => 'Transport State Transitions error',
+    '10'=> 'Unrecognised FIS type',
+};
+my $SNMPConfig = {
+    'host'      => $ENV{'host'} || $PluginSess->hostname || '',
+    'port'      => $ENV{'port'} || 161,
+    'community' => $ENV{'community'} || 'dellpublic',
+    'version'   => $ENV{'version'} || '2c',
+};
+
+my $StatusName = [ split( '_',File::Basename::basename $0 ) ]->[-1] || 'ready'; 
+my $MemberOIDv = '.1.3.6.1.4.1.12740.2.1.1.1.9.1';
+my $MemberList = $PluginSess->get_by_regex( $MemberOIDv, '\d+' ) || {};
+my $MemberName = undef; # My member name, id
+
+if( scalar keys %$MemberList ) {
+    # Get my member id string
+    for my $e ( keys %$MemberList ) {
+        next unless uc $SNMPConfig->{'host'} eq $MemberList->{ $e };
+        $MemberName = $e;
+        last;
+    }
+}
+
+my $v = sprintf( "%s.%d.1", $ParentOIDv, $OIDEnfants->{ $StatusName } );
+my $MetricsSet = $PluginSess->get_by_regex( $v, '\d+' ) || {};
+for my $e ( keys %$MetricsSet ) {
+    delete $MetricsSet->{ $e } unless $e =~ /$MemberName/;
+}
+die( '# Error: '.$PluginSess->error ) unless keys %$MetricsSet;
+
+if( defined $ARGV[0] ) {
+    # munin-run snmp_equallogic <some argument>
+    if( $ARGV[0] eq 'snmpconf' ) {
+        # munin-run snmp__equallogic snmpconf
+        printf( "require %s. [1-4]\n", $ParentOIDv );
+
+    } elsif( $ARGV[0] eq 'config' ) {
+        # munin-run snmp__equallogic config
+        if( $SNMPConfig->{'host'} && $SNMPConfig->{'host'} ne 'localhost' ) {
+            printf( "host_name %s\n", $SNMPConfig->{'host'} );
+        }
+        printf( "graph_title %s %s / %s\n", $GraphValue->{'device'}, $GraphValue->{'title'},
+                $LabelIndex->{ $OIDEnfants->{ $StatusName } } );
+        printf( "graph_args --base %d\n", $GraphValue->{'base'} ) if $GraphValue->{'base'};
+        printf( "graph_vlabel %s\n", $GraphValue->{'vlabel'} );
+        printf( "graph_scale yes\n" );
+        printf( "graph_category disk-error\n" );
+
+        my $n = scalar( keys %$MetricsSet );
+        my $o = [ map { sprintf( "%02d", $_ - 1 ) } ( 1 .. $n ) ];
+        printf( "graph_order %s\n", join( ' ', @$o ) );
+
+        for my $e ( 1 .. $n ) {
+            printf( "disk-%d.label Disk-%02d\n", $e - 1, $e );
+            printf( "disk-%d.warning  1\n", $e - 1 );
+            printf( "disk-%d.critical 1\n", $e - 1 );
+            printf( "disk-%d.type COUNTER\n", $e - 1 );
+        }
+    }
+    exit 0;
+
+} else {
+    # munin-run snmp__equallogic_storage
+    my $n = scalar( keys %$MetricsSet );
+    for my $e ( 1 .. $n ) {
+        my $k = sprintf( "%d.%d", $MemberName, $e );
+        printf( "disk-%d.value %d\n", $e - 1, $MetricsSet->{ $k } );
+    }
+}
+
+=head1 NAME
+
+snmp__equallogic_diskerror_ - Munin plugin for getting error counts of each disk
+in EqualLogic storage via SNMP.
+
+=head1 SETUP
+
+    # cat /etc/hosts
+    192.168.0.101 eq01
+    192.168.0.102 eq02
+
+    # cd /etc/munin/plugins
+
+    # echo 'Substitute the ERROR NAME for variable "X"'
+    # X=internal
+    # for E in eq01 eq02; do
+    > ln -s /usr/share/munin/plugins/snmp__equallogic_diskerror_ ./snmp_${E}_equallogic_diskerror_$X
+    > done
+
+    # /etc/rc.d/init.d/munin-node restart
+
+=head1 ERROR NAMES
+
+Available values are the followings:
+
+    ready       # eqlDiskErrorPhyReady
+    internal    # eqlDiskErrorPhyInternal
+    commwake    # eqlDiskErrorCommWake
+    decode      # eqlDiskErrorDecode10b8b
+    disparity   # eqlDiskErrorDisparity
+    crc         # eqlDiskErrorCRC
+    handshake   # eqlDiskErrorHandShake
+    linkseq     # eqlDiskErrorLinkSeq
+    transport   # eqlDiskErrorTransportState
+    fistype     # eqlDiskErrorUnrecFIS
+
+=head1 SEE ALSO
+
+SNMP OIDs for EqualLogic
+L<http://cric.grenoble.cnrs.fr/Administrateurs/Outils/MIBS/?oid=1.3.6.1.4.1.12740>
+
+=head1 AUTHOR
+
+Copyright (C) 2014 azumakuniyuki
+
+=head1 LICENSE
+
+This library is free software; you can redistribute it and/or modify it under 
+the same terms as Perl itself.
+
+=cut
+
+
