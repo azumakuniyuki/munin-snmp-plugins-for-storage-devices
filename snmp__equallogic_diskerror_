@@ -102,7 +102,7 @@ if( defined $ARGV[0] ) {
         printf( "graph_order %s\n", join( ' ', @$o ) );
 
         for my $e ( 1 .. $n ) {
-            printf( "disk-%d.label Disk-%02d\n", $e - 1, $e );
+            printf( "disk-%d.label Disk-%02d\n", $e - 1, $e - 1 );
             printf( "disk-%d.warning  1\n", $e - 1 );
             printf( "disk-%d.critical 1\n", $e - 1 );
             printf( "disk-%d.type COUNTER\n", $e - 1 );
