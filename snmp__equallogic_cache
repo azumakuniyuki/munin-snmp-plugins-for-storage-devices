@@ -1,0 +1,170 @@
+#!/usr/bin/perl -w
+#%# family=snmpauto
+#%# capabilities=snmpconf
+use strict;
+use warnings;
+use Munin::Plugin::SNMP;
+use Net::SNMP 'oid_lex_sort';
+
+my( $PluginSess, $E ) = Munin::Plugin::SNMP->session();
+die sprintf( "# Error: %s\n", $E ) if $E;
+
+# http://cric.grenoble.cnrs.fr/Administrateurs/Outils/MIBS/?oid=1.3.6.1.4.1.12740.2.1.22.1
+my $PluginVers = '0.0.2';
+my $GraphValue = {
+    'title'     => 'Cache Statistics',
+    'device'    => 'EqualLogic',
+    'vlabel'    => '',
+    'base'      => 0,
+    'lower'     => 0,
+    'upper'     => 0,
+};
+my $StateIndex = {
+    '0' => 'unknown',
+    '1' => 'normal',
+    '2' => 'warning',
+    '3' => 'critical',
+};
+my $ParentOIDv = '1.3.6.1.4.1.12740.2.1.22.1';
+my $OIDEnfants = {
+    'total-page-count'  => 1,   # eqlMemberTotalPageCount
+    'page-count-hot'    => 2,   # eqlMemberHotPageCount
+    'page-count-warm'   => 3,   # eqlMemberWarmPageCount
+    'page-count-cold'   => 4,   # eqlMemberColdPageCount
+    'page-size'         => 5,   # eqlMemberPageSize
+    'ssd-accelerator-size'      => 6,   # eqlMemberSSDAcceleratorSize
+    'ssd-cache-size'            => 7,   # eqlMemberSSDCacheSize
+    'ssd-accelerator-entries'   => 8,   # eqlMemberSSDAcceleratorEntriesTotal
+    'ssd-accelerator-used'      => 9,   # eqlMemberSSDAcceleratorEntriesUsed
+};
+my $LabelIndex = {
+    '1' => 'PageCount(total)',
+    '2' => 'PageCount(hot)',
+    '3' => 'PageCount(warm)',
+    '4' => 'PageCount(cold)',
+    '5' => 'PageSize(KB)',
+    '6' => 'SSD-Accelerator(GB)',
+    '7' => 'SSD-Accelerator-Cache(GB)',
+    '8' => 'SSD-Accelerator-Entries',
+    '9' => 'SSD-Accelerator-Used',
+};
+my $SNMPConfig = {
+    'host'      => $ENV{'host'} || $PluginSess->hostname || '',
+    'port'      => $ENV{'port'} || 161,
+    'community' => $ENV{'community'} || 'dellpublic',
+    'version'   => $ENV{'version'} || '2c',
+};
+
+my $MemberOIDv = '.1.3.6.1.4.1.12740.2.1.1.1.9.1';
+my $MemberList = $PluginSess->get_by_regex( $MemberOIDv, '\d+' ) || {};
+my $MemberName = undef; # My member name, id
+
+if( scalar keys %$MemberList ) {
+    # Get my member id string
+    for my $e ( keys %$MemberList ) {
+        next unless uc $SNMPConfig->{'host'} eq $MemberList->{ $e };
+        $MemberName = $e;
+        last;
+    }
+}
+
+my $MetricsSet = $PluginSess->get_by_regex( $ParentOIDv, '\d+' ) || {};
+for my $e ( keys %$MetricsSet ) {
+    delete $MetricsSet->{ $e } unless $e =~ /$MemberName/;
+}
+die( '# Error: '.$PluginSess->error ) unless keys %$MetricsSet;
+
+if( defined $ARGV[0] ) {
+    # munin-run snmp_equallogic <some argument>
+    if( $ARGV[0] eq 'snmpconf' ) {
+        # munin-run snmp__equallogic snmpconf
+        printf( "require %s. [1-9]\n", $ParentOIDv );
+
+    } elsif( $ARGV[0] eq 'config' ) {
+        # munin-run snmp__equallogic config
+        if( $SNMPConfig->{'host'} && $SNMPConfig->{'host'} ne 'localhost' ) {
+            printf( "host_name %s\n", $SNMPConfig->{'host'} );
+        }
+        printf( "graph_title %s %s\n", $GraphValue->{'device'}, $GraphValue->{'title'} );
+        printf( "graph_args --base %d\n", $GraphValue->{'base'} ) if $GraphValue->{'base'};
+        printf( "graph_vlabel %s\n", $GraphValue->{'vlabel'} );
+        printf( "graph_category disk\n" );
+
+        my $o = [ map { oid2text( $_ ) } oid_lex_sort( keys %$MetricsSet ) ];
+        printf( "graph_order %s\n", join( ' ', @$o ) );
+        printf( "graph_scale no\n" );
+
+        for my $e ( keys %$MetricsSet ) {
+            my $i = oid2text( $e );
+            my $f = oid2label( $e );
+            next unless $i;
+
+            printf( "%s.label %s\n", $i, $f );
+            printf( "%s.type GAUGE\n", $i );
+        }
+    }
+    exit 0;
+
+} else {
+    # munin-run snmp__equallogic_storage
+    for my $e ( keys %$MetricsSet ) {
+        my $i = oid2text( $e );
+        next unless $i;
+        printf( "%s.value %d\n", $i, $MetricsSet->{ $e } );
+    }
+}
+
+sub oid2text  {
+    my $argv = shift;
+    my $head = [ split '\.', $argv ]->[0];
+    my $text = '';
+
+    for my $e ( keys %$OIDEnfants ) {
+        next unless $head eq $OIDEnfants->{ $e };
+        $text = $e;
+        last;
+    }
+    return $text;
+}
+
+sub oid2label {
+    my $argv = shift;
+    my $head = [ split '\.', $argv ]->[0];
+    return $LabelIndex->{ $head } || '';
+}
+
+=head1 NAME
+
+snmp__equallogic_storage - Munin plugin for getting storage usage in EqualLogic
+storage via SNMP.
+
+=head1 SETUP
+
+    # cat /etc/hosts
+    192.168.0.101 eq01
+    192.168.0.102 eq02
+
+    # cd /etc/munin/plugins
+    # for E in eq01 eq02; do
+    > ln -s /usr/share/munin/plugins/snmp__equallogic_storage ./snmp_${E}_equallogic_storage
+    > done
+
+    # /etc/rc.d/init.d/munin-node restart
+
+=head1 SEE ALSO
+
+SNMP OIDs for EqualLogic
+L<http://cric.grenoble.cnrs.fr/Administrateurs/Outils/MIBS/?oid=1.3.6.1.4.1.12740>
+
+=head1 AUTHOR
+
+Copyright (C) 2014 azumakuniyuki
+
+=head1 LICENSE
+
+This library is free software; you can redistribute it and/or modify it under 
+the same terms as Perl itself.
+
+=cut
+
+
