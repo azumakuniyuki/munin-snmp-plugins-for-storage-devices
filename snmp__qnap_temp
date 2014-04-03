@@ -1,0 +1,152 @@
+#!/usr/bin/perl -w
+#%# family=snmpauto
+#%# capabilities=snmpconf
+use strict;
+use warnings;
+use Munin::Plugin::SNMP;
+use Net::SNMP 'oid_lex_sort';
+
+my( $PluginSess, $E ) = Munin::Plugin::SNMP->session();
+die sprintf( "# Error: %s\n", $E ) if $E;
+
+my $PluginVers = '0.0.1';
+my $GraphValue = {
+    'title'     => 'Temperatures',
+    'device'    => 'QNAP',
+    'vlabel'    => 'degree Celsius',
+    'base'      => undef,
+    'lower'     => 0,
+    'upper'     => 120,
+};
+my $ParentOIDv = '.1.3.6.1.4.1.24681.1.2';
+my $DeviceMaps = {
+    # snmpwalk -v2c -cpublic QNAP-HOST 1.3.6.1.4.1.24681.1.2.6
+    #   SNMPv2-SMI::enterprises.24681.1.2.6.0 = STRING: "40 C/104 F"
+    '5'         => 'CPU',
+    '6'         => 'System',
+};
+my $HDDDevices = { 
+    # snmpwalk -v2c -cpublic QNAP-HOST 1.3.6.1.4.1.24681.1.2.11.1.3
+    #   SNMPv2-SMI::enterprises.24681.1.2.11.1.3.1 = STRING: "30 C/86 F"
+    #   SNMPv2-SMI::enterprises.24681.1.2.11.1.3.2 = STRING: "30 C/86 F"
+    #   SNMPv2-SMI::enterprises.24681.1.2.11.1.3.3 = STRING: "31 C/87 F"
+    #   SNMPv2-SMI::enterprises.24681.1.2.11.1.3.4 = STRING: "30 C/86 F"
+    #   SNMPv2-SMI::enterprises.24681.1.2.11.1.3.5 = STRING: "29 C/84 F"
+    #   SNMPv2-SMI::enterprises.24681.1.2.11.1.3.6 = STRING: "29 C/84 F"
+    #   SNMPv2-SMI::enterprises.24681.1.2.11.1.3.7 = STRING: "29 C/84 F"
+    #   SNMPv2-SMI::enterprises.24681.1.2.11.1.3.8 = STRING: "28 C/82 F"
+    '11.1.3'    => 'HDD',
+};
+my $SNMPConfig = {
+    'host'      => $ENV{'host'} || $PluginSess->hostname || '',
+    'port'      => $ENV{'port'} || 161,
+    'community' => $ENV{'community'} || 'dellpublic',
+    'version'   => $ENV{'version'} || '2c',
+};
+
+my $MetricsSet = $PluginSess->get_hash(
+                    '-baseoid'  => $ParentOIDv,
+                    '-cols'     => $DeviceMaps,
+                 ) or die( '# Error: '.$PluginSess->error );
+my $HDDMetrics = $PluginSess->get_hash(
+                    '-baseoid'  => $ParentOIDv,
+                    '-cols'     => $HDDDevices,
+                 ) or die( '# Error: '.$PluginSess->error );
+
+if( defined $ARGV[0] ) {
+
+    if( $ARGV[0] eq 'snmpconf' ) {
+        printf( "require %s. (5,6,11[.]1[.]3)\n", $ParentOIDv );
+
+    } elsif( $ARGV[0] eq 'config' ) {
+
+        if( $SNMPConfig->{'host'} && $SNMPConfig->{'host'} ne 'localhost' ) {
+            printf( "host_name %s\n", $SNMPConfig->{'host'} );
+        }
+        printf( "graph_title %s %s\n", $GraphValue->{'device'}, $GraphValue->{'title'} );
+        printf( "graph_args --lower-limit %d --upper-limit %d\n", $GraphValue->{'lower'}, $GraphValue->{'upper'} );
+        printf( "graph_vlabel %s\n", $GraphValue->{'vlabel'} );
+        printf( "graph_category sensors\n" );
+
+        my $o = [];
+        for my $e ( 'CPU', 'System' ) {
+            push @$o, $e;
+            printf( "%s.label %s\n", $e, $e );
+            printf( "%s.warning 60\n", $e );
+            printf( "%s.critical 70\n", $e );
+            printf( "%s.type GAUGE\n", $e );
+            printf( "%s.draw LINE3\n", $e );
+        }
+
+        for my $e ( sort keys %$HDDMetrics ) {
+            my $n = sprintf( "HDD-%02d", $e );
+            push @$o, $n;
+            printf( "%s.label %s\n", $n, $n );
+            printf( "%s.warning 45\n", $n );
+            printf( "%s.critical 50\n", $n );
+            printf( "%s.type GAUGE\n", $n );
+        }
+        printf( "graph_order %s\n", join( ' ', @$o ) );
+    }
+    exit 0;
+
+} else {
+    # Print values
+    for my $e ( keys %$MetricsSet ) {
+        for my $f ( keys %{ $MetricsSet->{ $e } } ) {
+            my $v = degree( $MetricsSet->{ $e }->{ $f }, 'C' );
+            printf( "%s.value %d\n", $f, $v );
+        }
+    }
+
+    for my $e ( sort keys %$HDDMetrics ) {
+        # Join HDD metrics into metrics data
+        my $n = sprintf( "HDD-%02d", $e );
+        my $v = degree( $HDDMetrics->{ $e }->{'HDD'}, 'C' );
+        printf( "%s.value %d\n", $n, $v );
+    }
+}
+
+sub degree {
+    my $argv = shift || return undef;
+    my $unit = shift || 'C';    # or 'F'
+    my $data = '';
+
+    for my $e ( split( '/', $argv ) ) {
+        next unless $e =~ m/$unit\z/i;
+        $data = [ split( ' ', $e ) ]->[0];
+        last;
+    }
+    return $data;
+}
+
+=head1 NAME
+
+snmp__qnap_temp - Munin plugin for monitoring temperatures in QNAP NAS storage
+via SNMP.
+
+=head1 SETUP
+
+    # cat /etc/hosts
+    192.168.0.111 qn1
+
+    # cd /etc/munin/plugins
+    # ln -s /usr/share/munin/plugins/snmp__qnap_temp ./snmp_qn1_qnap_temp
+
+    # /etc/rc.d/init.d/munin-node restart
+
+=head1 SEE ALSO
+
+QNAP Turbo NAS Software User Manual
+L<http://docs.qnap.com/nas/en/index.html?snmp_settings.htm>
+
+=head1 AUTHOR
+
+Copyright (C) 2014 azumakuniyuki
+
+=head1 LICENSE
+
+This library is free software; you can redistribute it and/or modify it under 
+the same terms as Perl itself.
+
+=cut
