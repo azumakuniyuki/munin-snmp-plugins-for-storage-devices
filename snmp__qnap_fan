@@ -4,12 +4,11 @@
 use strict;
 use warnings;
 use Munin::Plugin::SNMP;
-use Net::SNMP 'oid_lex_sort';
 
 my( $PluginSess, $E ) = Munin::Plugin::SNMP->session();
 die sprintf( "# Error: %s\n", $E ) if $E;
 
-my $PluginVers = '0.0.1';
+my $PluginVers = '0.0.2';
 my $GraphValue = {
     'title'     => 'Fans Speed',
     'device'    => 'QNAP',
