@@ -1,0 +1,25 @@
+Revision history of SNMP-Plugins for storage devices
+
+0.0.4   Fri Mar 28 10:26:23 2014 +0900
+    - Fix code for displaying disk label 
+    - Implement plugin for disk status/snmp__equallogic_diskstatus_
+    - Implement plugin for pool statistics/snmp__equallogic_pool
+    - Implement plugin for cache statistics/snmp__equallogic_cache
+    - Display disk errors on EqualLogic/snmp__equallogic_diskerror_
+    - Fix label for each disk number 
+
+0.0.3   Thu Mar 27 16:30:43 2014 +0900
+    - Update graph arguments 
+    - Tiny code refactoring 
+    - Implement plugin for getting information about connections/snmp__equallogic_conn
+    - Implement plugin for getting storage usage/snmp__equallogic_storage 
+
+0.0.2 Wed Mar 26 20:22:35 2014 +0900
+    - Implement plugin for getting Fan speed of EqualLogic/snmp__equallogic_fan 
+    - Improved code for getting member id 
+    - Labels have been changed 
+    - Fix label for warning, critical at each plugin.
+
+0.0.1   Wed Mar 26 16:45:13 2014 +0900
+    - Implemented plugin for getting temperatures on EqualLogic/snmp__equallogic_temp
+
