@@ -4,7 +4,6 @@
 use strict;
 use warnings;
 use Munin::Plugin::SNMP;
-use Net::SNMP 'oid_lex_sort';
 
 my( $PluginSess, $E ) = Munin::Plugin::SNMP->session();
 die sprintf( "# Error: %s\n", $E ) if $E;
@@ -132,7 +131,6 @@ via SNMP.
 
     # cd /etc/munin/plugins
     # ln -s /usr/share/munin/plugins/snmp__qnap_temp ./snmp_qn1_qnap_temp
-
     # /etc/rc.d/init.d/munin-node restart
 
 =head1 SEE ALSO
