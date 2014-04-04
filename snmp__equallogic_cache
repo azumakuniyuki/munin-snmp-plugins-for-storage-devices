@@ -135,8 +135,8 @@ sub oid2label {
 
 =head1 NAME
 
-snmp__equallogic_storage - Munin plugin for getting storage usage in EqualLogic
-storage via SNMP.
+snmp__equallogic_cache - Munin plugin for getting storage cache statistics in
+EqualLogic storage via SNMP.
 
 =head1 SETUP
 
