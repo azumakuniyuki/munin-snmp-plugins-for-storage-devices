@@ -1,5 +1,8 @@
 Revision history of SNMP-Plugins for storage devices
 
+0.1.1   Fri, 11 Apr 2014 18:02:13 +0900 (JST)
+    - Implement disk status plugin for QNAP/snmp__qnap_disk
+
 0.1.0   Fri,  4 Apr 2014 18:17:11 +0900 (JST)
     - Implement temperature plugin for QNAP/snmp__qnap_temp
     - Implement Fan speed plugin for QNAP/snmp__qnap_fan
