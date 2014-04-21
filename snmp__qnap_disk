@@ -1,0 +1,124 @@
+#!/usr/bin/perl -w
+#%# family=snmpauto
+#%# capabilities=snmpconf
+use strict;
+use warnings;
+use Munin::Plugin::SNMP;
+
+my( $PluginSess, $E ) = Munin::Plugin::SNMP->session();
+die sprintf( "# Error: %s\n", $E ) if $E;
+
+my $PluginVers = '0.0.1';
+my $GraphValue = {
+    'title'     => 'Temperatures',
+    'device'    => 'QNAP',
+    'vlabel'    => 'degree Celsius',
+    'base'      => undef,
+    'lower'     => 5,
+    'upper'     => 80,
+};
+my $ParentOIDv = '.1.3.6.1.2.1.25.2.3.1';
+my $DeviceMaps = {
+    # snmpwalk -v2c -cpublic QNAP-HOST 1.3.6.1.4.1.24681.2.3.1
+    '3' => 'Label',
+    '4' => 'Allocation-Unit',
+    '5' => 'StorageSize',
+    '6' => 'StorageUsed',
+};
+my $SNMPConfig = {
+    'host'      => $ENV{'host'} || $PluginSess->hostname || '',
+    'port'      => $ENV{'port'} || 161,
+    'community' => $ENV{'community'} || 'dellpublic',
+    'version'   => $ENV{'version'} || '2c',
+};
+
+my $MetricsSet = $PluginSess->get_hash(
+                    '-baseoid'  => $ParentOIDv,
+                    '-cols'     => $DeviceMaps,
+                 ) or die( '# Error: '.$PluginSess->error );
+
+if( defined $ARGV[0] ) {
+
+    if( $ARGV[0] eq 'snmpconf' ) {
+        printf( "require %s. [2-6])\n", $ParentOIDv );
+
+    } elsif( $ARGV[0] eq 'config' ) {
+
+        if( $SNMPConfig->{'host'} && $SNMPConfig->{'host'} ne 'localhost' ) {
+            printf( "host_name %s\n", $SNMPConfig->{'host'} );
+        }
+        printf( "graph_title %s %s\n", $GraphValue->{'device'}, $GraphValue->{'title'} );
+        printf( "graph_args --lower-limit %d --upper-limit %d\n", $GraphValue->{'lower'}, $GraphValue->{'upper'} );
+        printf( "graph_vlabel %s\n", $GraphValue->{'vlabel'} );
+        printf( "graph_category sensors\n" );
+
+        use Data::Dumper;
+        warn Dumper $MetricsSet;
+
+        my $o = [];
+        for my $e ( 'CPU', 'System' ) {
+            push @$o, $e;
+            printf( "%s.label %s\n", $e, $e );
+            printf( "%s.warning 60\n", $e );
+            printf( "%s.critical 70\n", $e );
+            printf( "%s.type GAUGE\n", $e );
+            printf( "%s.draw LINE3\n", $e );
+        }
+
+        printf( "graph_order %s\n", join( ' ', @$o ) );
+    }
+    exit 0;
+
+} else {
+    # Print values
+    for my $e ( keys %$MetricsSet ) {
+        for my $f ( keys %{ $MetricsSet->{ $e } } ) {
+            my $v = degree( $MetricsSet->{ $e }->{ $f }, 'C' );
+            printf( "%s.value %d\n", $f, $v );
+        }
+    }
+}
+
+sub degree {
+    my $argv = shift || return undef;
+    my $unit = shift || 'C';    # or 'F'
+    my $data = '';
+
+    for my $e ( split( '/', $argv ) ) {
+        next unless $e =~ m/$unit\z/i;
+        $data = [ split( ' ', $e ) ]->[0];
+        last;
+    }
+    return $data;
+}
+
+=head1 NAME
+
+snmp__qnap_temp - Munin plugin for monitoring disk usage of QNAP NAS storage
+via SNMP.
+
+=head1 SETUP
+
+    # cat /etc/hosts
+    192.168.0.111 qn1
+
+    # cd /etc/munin/plugins
+    # ln -s /usr/share/munin/plugins/snmp__qnap_disk ./snmp_qn1_qnap_disk
+    # /etc/rc.d/init.d/munin-node restart
+
+=head1 SEE ALSO
+
+QNAP Turbo NAS Software User Manual
+L<http://docs.qnap.com/nas/en/index.html?snmp_settings.htm>
+
+=head1 AUTHOR
+
+Copyright (C) 2014 azumakuniyuki
+
+=head1 LICENSE
+
+This library is free software; you can redistribute it and/or modify it under 
+the same terms as Perl itself.
+
+=cut
+

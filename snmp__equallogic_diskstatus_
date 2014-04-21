@@ -125,7 +125,6 @@ EqualLogic storage via SNMP.
     192.168.0.102 eq02
 
     # cd /etc/munin/plugins
-
     # echo 'Substitute the STATUS NAME for variable "X"'
     # X=xfer
     # for E in eq01 eq02; do
